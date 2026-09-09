@@ -7,30 +7,31 @@ import sys
 from pathlib import Path
 
 import requests
+from garminconnect import GarminConnectAuthenticationError, GarminConnectConnectionError, GarminConnectTooManyRequestsError
 from mcp.server.fastmcp import FastMCP
 
-from garminconnect import GarminConnectAuthenticationError, GarminConnectConnectionError, GarminConnectTooManyRequestsError
-
 # Import all modules
-from garmin_mcp import token_utils
+from garmin_mcp import (
+    activity_analysis,
+    activity_management,
+    challenges,
+    courses,
+    data_management,
+    devices,
+    gear_management,
+    health_wellness,
+    nutrition,
+    token_utils,
+    training,
+    user_profile,
+    weight_management,
+    womens_health,
+    workout_builders,
+    workout_templates,
+    workouts,
+)
 from garmin_mcp.garmin_session import FileTokenStore, GarminSession, PostgresTokenStore
 from garmin_mcp.garmin_session import errors as _auth_errors
-from garmin_mcp import activity_management
-from garmin_mcp import health_wellness
-from garmin_mcp import user_profile
-from garmin_mcp import devices
-from garmin_mcp import gear_management
-from garmin_mcp import weight_management
-from garmin_mcp import challenges
-from garmin_mcp import training
-from garmin_mcp import workouts
-from garmin_mcp import workout_templates
-from garmin_mcp import data_management
-from garmin_mcp import womens_health
-from garmin_mcp import nutrition
-from garmin_mcp import workout_builders
-from garmin_mcp import courses
-from garmin_mcp import activity_analysis
 
 
 def is_interactive_terminal() -> bool:
@@ -78,7 +79,7 @@ if email and email_file:
         "Must only provide one of GARMIN_EMAIL and GARMIN_EMAIL_FILE, got both"
     )
 elif email_file:
-    with open(email_file, "r") as email_file:
+    with open(email_file) as email_file:
         email = email_file.read().rstrip()
 
 password = os.environ.get("GARMIN_PASSWORD")
@@ -88,7 +89,7 @@ if password and password_file:
         "Must only provide one of GARMIN_PASSWORD and GARMIN_PASSWORD_FILE, got both"
     )
 elif password_file:
-    with open(password_file, "r") as password_file:
+    with open(password_file) as password_file:
         password = password_file.read().rstrip()
 
 tokenstore = token_utils.get_token_path()
@@ -132,20 +133,37 @@ def _parse_tool_set(value):
     return {name.strip().lower() for name in value.split(",") if name.strip()}
 
 
-enabled_tools = _parse_tool_set(os.getenv("GARMIN_ENABLED_TOOLS"))
-disabled_tools = _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
+def _resolve_tool_filters():
+    """Read and validate tool filter environment variables at server startup."""
+    enabled_value = os.getenv("GARMIN_ENABLED_TOOLS")
+    enabled_tools = _parse_tool_set(enabled_value)
+    if enabled_value and enabled_value.strip() and not enabled_tools:
+        raise ValueError(
+            "Invalid GARMIN_ENABLED_TOOLS: expected at least one tool name"
+        )
+    disabled_tools = _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
+    return enabled_tools, disabled_tools
 
 
 _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
 
 
+# (prefix, hint): the original exception text is inserted between them so
+# the real cause is never hidden behind the generic hint -- see
+# _session_protected_call.
 _GARMIN_PROXY_MESSAGES = {
     GarminConnectAuthenticationError: (
-        "Garmin authentication expired. "
-        "Re-run 'garmin-mcp-auth' to refresh your tokens and restart the server."
+        "Garmin authentication failed",
+        "Re-run 'garmin-mcp-auth' to refresh your tokens and restart the server.",
     ),
-    GarminConnectTooManyRequestsError: ("Garmin rate limit hit. Wait a few minutes before retrying."),
-    GarminConnectConnectionError: ("Garmin Connect is unreachable. Check your network connection or try again later."),
+    GarminConnectTooManyRequestsError: (
+        "Garmin rate limit hit",
+        "Wait a few minutes before retrying.",
+    ),
+    GarminConnectConnectionError: (
+        "Garmin Connect request failed",
+        "Garmin Connect may be unreachable; check your network connection or try again later.",
+    ),
 }
 
 
@@ -168,10 +186,10 @@ def _session_protected_call(session, attr):
                 # cache for those would force a needless re-login (and more
                 # rate limiting) on the next call.
                 session.invalidate()
-            for exc_type, msg in _GARMIN_PROXY_MESSAGES.items():
+            for exc_type, (prefix, hint) in _GARMIN_PROXY_MESSAGES.items():
                 if isinstance(exc, exc_type):
-                    error_details = str(exc)
-                    full_msg = f"{msg} (Details: {error_details})" if error_details else msg
+                    details = str(exc).strip().rstrip(".") or "unknown error"
+                    full_msg = f"{prefix}: {details}. {hint}"
                     raise type(exc)(full_msg) from None
             raise
         else:
@@ -436,6 +454,7 @@ def main():
     #   GARMIN_MCP_HOST      - bind address for HTTP transports (default 127.0.0.1)
     #   GARMIN_MCP_PORT      - bind port for HTTP transports (default 8000)
     try:
+        enabled_tools, disabled_tools = _resolve_tool_filters()
         transport, http_host, http_port = _parse_transport_config()
     except ValueError as exc:
         print(str(exc), file=sys.stderr)

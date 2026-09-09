@@ -52,17 +52,34 @@ class TestGarminProxy:
     def test_auth_error_message_is_actionable(self):
         proxy = self._proxy(get_activities=GarminConnectAuthenticationError("expired"))
         exc = pytest.raises(GarminConnectAuthenticationError, proxy.get_activities)
+        assert str(exc.value).startswith("Garmin authentication failed: expired.")
         assert "Re-run 'garmin-mcp-auth'" in str(exc.value)
 
     def test_rate_limit_error_message_is_actionable(self):
         proxy = self._proxy(get_activities=GarminConnectTooManyRequestsError("429"))
         exc = pytest.raises(GarminConnectTooManyRequestsError, proxy.get_activities)
+        assert str(exc.value).startswith("Garmin rate limit hit: 429.")
         assert "Wait a few minutes" in str(exc.value)
 
     def test_connection_error_message_is_actionable(self):
         proxy = self._proxy(get_steps_data=GarminConnectConnectionError("timeout"))
         exc = pytest.raises(GarminConnectConnectionError, proxy.get_steps_data)
+        assert str(exc.value).startswith("Garmin Connect request failed: timeout.")
         assert "unreachable" in str(exc.value)
+
+    def test_original_message_is_not_hidden_behind_a_generic_label(self):
+        """A non-network failure (e.g. a missing display name) must not read
+        as a network problem just because it happens to raise
+        GarminConnectConnectionError -- the library's own text must stay
+        front and centre, not get buried in a "(Details: ...)" suffix."""
+        proxy = self._proxy(get_steps_data=GarminConnectConnectionError("missing displayName"))
+        exc = pytest.raises(GarminConnectConnectionError, proxy.get_steps_data)
+        assert "missing displayName" in str(exc.value).split(".")[0]
+
+    def test_empty_original_message_still_gets_a_hint(self):
+        proxy = self._proxy(get_steps_data=GarminConnectConnectionError())
+        exc = pytest.raises(GarminConnectConnectionError, proxy.get_steps_data)
+        assert str(exc.value).startswith("Garmin Connect request failed: unknown error.")
 
     def test_unknown_exception_is_re_raised_unchanged(self):
         proxy = self._proxy(get_activities=ValueError("unexpected"))
